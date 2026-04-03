@@ -181,6 +181,17 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .media-thumb.video { background: linear-gradient(135deg, #6c5ce7, #a29bfe); }
 .media-thumb.audio { background: linear-gradient(135deg, #e74c5c, #fd79a8); }
 .media-thumb.text { background: linear-gradient(135deg, #f39c12, #fdcb6e); }
+.media-thumb img { width: 100%; height: 100%; object-fit: cover; border-radius: 4px; }
+.import-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; padding: 10px; margin-bottom: 8px;
+  border-radius: var(--radius); border: none;
+  background: var(--accent); color: #fff;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: background var(--transition);
+}
+.import-btn:hover { background: var(--accent-hover); }
+.import-btn svg { width: 16px; height: 16px; }
 .media-info { flex: 1; min-width: 0; }
 .media-name { font-size: 12px; color: var(--text-100); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .media-meta { font-size: 10px; color: var(--text-400); margin-top: 2px; }
@@ -709,6 +720,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   </div>
 </div>
 
+<!-- HIDDEN FILE INPUT -->
+<input type="file" id="fileInput" accept="video/*,audio/*" multiple style="display:none">
+
 <!-- TOAST CONTAINER -->
 <div class="toast-container" id="toastContainer"></div>
 
@@ -752,6 +766,83 @@ let clipIdCounter = 10;
 let trackIdCounter = 10;
 function genClipId() { return 'c' + (++clipIdCounter); }
 function genTrackId() { return 't' + (++trackIdCounter); }
+
+// Map mediaId → { videoEl, objectUrl } for real imported files
+const mediaElements = {};
+
+// ===================================================================
+// FILE IMPORT
+// ===================================================================
+$('fileInput').addEventListener('change', (e) => {
+  const files = Array.from(e.target.files);
+  if (!files.length) return;
+  files.forEach(file => importFile(file));
+  e.target.value = '';
+});
+
+function importFile(file) {
+  const isVideo = file.type.startsWith('video/');
+  const isAudio = file.type.startsWith('audio/');
+  if (!isVideo && !isAudio) { toast('Nur Video/Audio-Dateien'); return; }
+
+  const url = URL.createObjectURL(file);
+  const id = 'm' + Date.now() + Math.random().toString(36).slice(2,6);
+  const name = file.name.replace(/\.[^.]+$/, '');
+  const colors = ['#6c5ce7','#0984e3','#00b894','#e17055','#fdcb6e','#a29bfe'];
+  const color = colors[Math.floor(Math.random() * colors.length)];
+
+  if (isVideo) {
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+    video.src = url;
+
+    video.addEventListener('loadedmetadata', () => {
+      const duration = Math.round(video.duration * 10) / 10;
+
+      // Generate thumbnail at 1s
+      video.currentTime = Math.min(1, duration / 2);
+      video.addEventListener('seeked', function onSeeked() {
+        video.removeEventListener('seeked', onSeeked);
+        const thumbCanvas = document.createElement('canvas');
+        thumbCanvas.width = 96;
+        thumbCanvas.height = 64;
+        const tCtx = thumbCanvas.getContext('2d');
+        tCtx.drawImage(video, 0, 0, 96, 64);
+        const thumbnail = thumbCanvas.toDataURL('image/jpeg', 0.7);
+
+        const media = { id, name, type: 'video', duration, color, thumbnail, objectUrl: url };
+        state.mediaLibrary.push(media);
+        mediaElements[id] = { videoEl: video, objectUrl: url };
+
+        renderSidebar();
+        toast('Video importiert: ' + name);
+      }, { once: true });
+    });
+
+    video.addEventListener('error', () => {
+      toast('Fehler beim Laden: ' + name);
+      URL.revokeObjectURL(url);
+    });
+  } else {
+    const audio = document.createElement('audio');
+    audio.preload = 'metadata';
+    audio.src = url;
+    audio.addEventListener('loadedmetadata', () => {
+      const duration = Math.round(audio.duration * 10) / 10;
+      const media = { id, name, type: 'audio', duration, color: '#e74c5c', objectUrl: url };
+      state.mediaLibrary.push(media);
+      mediaElements[id] = { audioEl: audio, objectUrl: url };
+      renderSidebar();
+      toast('Audio importiert: ' + name);
+    });
+    audio.addEventListener('error', () => {
+      toast('Fehler beim Laden: ' + name);
+      URL.revokeObjectURL(url);
+    });
+  }
+}
 
 // ===================================================================
 // UNDO / REDO
@@ -824,14 +915,20 @@ function renderSidebar() {
   let html = '';
 
   if (tab === 'media') {
-    html += '<div class="sidebar-section-title">Video</div>';
-    state.mediaLibrary.filter(m => m.type === 'video').forEach(m => {
-      html += renderMediaItem(m);
-    });
-    html += '<div class="sidebar-section-title">Audio</div>';
-    state.mediaLibrary.filter(m => m.type === 'audio').forEach(m => {
-      html += renderMediaItem(m);
-    });
+    html += `<button class="import-btn" onclick="$('fileInput').click()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      Video / Audio importieren
+    </button>`;
+    const videos = state.mediaLibrary.filter(m => m.type === 'video');
+    const audios = state.mediaLibrary.filter(m => m.type === 'audio');
+    if (videos.length) {
+      html += '<div class="sidebar-section-title">Video</div>';
+      videos.forEach(m => { html += renderMediaItem(m); });
+    }
+    if (audios.length) {
+      html += '<div class="sidebar-section-title">Audio</div>';
+      audios.forEach(m => { html += renderMediaItem(m); });
+    }
     html += `<button class="media-add-btn" onclick="addDemoMedia()">+ Demo-Medium hinzufügen</button>`;
   } else if (tab === 'text') {
     html += '<div class="sidebar-section-title">Text-Vorlagen</div>';
@@ -849,6 +946,10 @@ function renderSidebar() {
       </div>`;
     });
   } else if (tab === 'audio') {
+    html += `<button class="import-btn" onclick="$('fileInput').setAttribute('accept','audio/*');$('fileInput').click();setTimeout(()=>$('fileInput').setAttribute('accept','video/*,audio/*'),500)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      Audio importieren
+    </button>`;
     html += '<div class="sidebar-section-title">Audio-Bibliothek</div>';
     state.mediaLibrary.filter(m => m.type === 'audio').forEach(m => {
       html += renderMediaItem(m);
@@ -876,11 +977,17 @@ function renderSidebar() {
 }
 
 function renderMediaItem(m) {
+  const thumbContent = m.thumbnail
+    ? `<img src="${m.thumbnail}" alt="">`
+    : (m.type === 'video' ? '▶' : m.type === 'audio' ? '♪' : 'T');
+  const durLabel = m.duration >= 60
+    ? Math.floor(m.duration/60) + ':' + String(Math.round(m.duration%60)).padStart(2,'0')
+    : m.duration.toFixed(1) + 's';
   return `<div class="media-item" draggable="true" data-media-id="${m.id}">
-    <div class="media-thumb ${m.type}">${m.type === 'video' ? '▶' : m.type === 'audio' ? '♪' : 'T'}</div>
+    <div class="media-thumb ${m.type}">${thumbContent}</div>
     <div class="media-info">
       <div class="media-name">${m.name}</div>
-      <div class="media-meta">${m.duration}s · ${m.type}</div>
+      <div class="media-meta">${durLabel} · ${m.type}</div>
     </div>
     <button class="media-item-add" onclick="event.stopPropagation();addMediaToTimeline('${m.id}')" title="Zur Timeline hinzufügen">+</button>
   </div>`;
@@ -1014,33 +1121,52 @@ function renderPreview() {
     return track && track.visible && t >= c.start && t < c.start + c.duration;
   }).sort((a, b) => getTrackIndex(a.trackId) - getTrackIndex(b.trackId));
 
-  // Video clips — colored rectangles with patterns
+  // Video clips — real video frames or colored mock
   const videoClips = activeClips.filter(c => c.type === 'video');
   videoClips.forEach(clip => {
     const progress = (t - clip.start) / clip.duration;
+    const me = clip.mediaId ? mediaElements[clip.mediaId] : null;
+
     ctx.save();
-    ctx.fillStyle = clip.color;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Animated pattern
-    ctx.globalAlpha = 0.08;
-    for (let i = 0; i < 6; i++) {
-      const x = ((progress * 400 + i * 220) % (canvas.width + 200)) - 100;
+    if (me && me.videoEl && me.videoEl.readyState >= 2) {
+      // Draw real video frame
+      const v = me.videoEl;
+      const targetTime = (t - clip.start) * clip.speed;
+      if (Math.abs(v.currentTime - targetTime) > 0.1) {
+        v.currentTime = Math.min(targetTime, v.duration - 0.01);
+      }
+      // Draw video maintaining aspect ratio, filling canvas
+      const vw = v.videoWidth, vh = v.videoHeight;
+      const cw = canvas.width, ch = canvas.height;
+      const scale = Math.max(cw / vw, ch / vh);
+      const dw = vw * scale, dh = vh * scale;
+      ctx.drawImage(v, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+    } else {
+      // Mock preview: colored rectangle with pattern
+      ctx.fillStyle = clip.color;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.globalAlpha = 0.08;
+      for (let i = 0; i < 6; i++) {
+        const x = ((progress * 400 + i * 220) % (canvas.width + 200)) - 100;
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(x, canvas.height * (0.3 + i * 0.12), 60 + i * 15, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
       ctx.fillStyle = '#fff';
-      ctx.beginPath();
-      ctx.arc(x, canvas.height * (0.3 + i * 0.12), 60 + i * 15, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.font = 'bold 28px ' + getComputedStyle(document.documentElement).getPropertyValue('--font').trim();
+      ctx.textAlign = 'center';
+      ctx.fillText(clip.name, canvas.width / 2, canvas.height / 2 - 10);
     }
-    ctx.globalAlpha = 1;
 
-    // Clip name
+    // Time overlay
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(canvas.width - 90, canvas.height - 30, 85, 24);
     ctx.fillStyle = '#fff';
-    ctx.font = 'bold 28px ' + getComputedStyle(document.documentElement).getPropertyValue('--font').trim();
-    ctx.textAlign = 'center';
-    ctx.fillText(clip.name, canvas.width / 2, canvas.height / 2 - 10);
-    ctx.font = '16px ' + getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim();
-    ctx.globalAlpha = 0.6;
-    ctx.fillText(formatTime(t), canvas.width / 2, canvas.height / 2 + 20);
+    ctx.font = '13px ' + getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim();
+    ctx.textAlign = 'right';
+    ctx.fillText(formatTime(t), canvas.width - 12, canvas.height - 12);
     ctx.restore();
   });
 
